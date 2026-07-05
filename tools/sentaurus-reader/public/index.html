@@ -15,8 +15,8 @@
       </div>
       <div class="toolbar-actions">
         <label class="file-button">
-          打开 PDF
-          <input id="file-input" type="file" accept="application/pdf">
+          上传 PDF
+          <input id="upload-input" type="file" accept="application/pdf" multiple>
         </label>
         <button id="prev-page" type="button">上一页</button>
         <label class="page-control">
@@ -69,6 +69,14 @@
           <h2>术语搜索</h2>
           <input id="term-search" class="term-search" type="search" placeholder="搜索 TCAD / mesh / contour...">
           <div id="term-results" class="term-results"></div>
+        </section>
+
+        <section>
+          <div class="section-header">
+            <h2>已上传的 PDF 文件</h2>
+            <button id="refresh-files" type="button">刷新</button>
+          </div>
+          <div id="uploaded-files" class="uploaded-files"></div>
         </section>
 
         <section>

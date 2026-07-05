@@ -258,6 +258,28 @@ button:hover,
   justify-content: space-between;
 }
 
+.uploaded-files {
+  display: grid;
+  gap: 8px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.uploaded-file-item {
+  align-items: center;
+  background: #fbfcfe;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  padding: 9px;
+}
+
+.uploaded-file-item button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
 .notes {
   display: grid;
   gap: 8px;

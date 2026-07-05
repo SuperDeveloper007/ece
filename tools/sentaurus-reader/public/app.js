@@ -204,7 +204,7 @@ const elements = {
   pageNumber: document.querySelector("#page-number"),
   pageCount: document.querySelector("#page-count"),
   scale: document.querySelector("#scale"),
-  fileInput: document.querySelector("#file-input"),
+  uploadInput: document.querySelector("#upload-input"),
   emptySelection: document.querySelector("#empty-selection"),
   selectionCard: document.querySelector("#selection-card"),
   selectedText: document.querySelector("#selected-text"),
@@ -217,6 +217,8 @@ const elements = {
   termResults: document.querySelector("#term-results"),
   notes: document.querySelector("#notes"),
   exportNotes: document.querySelector("#export-notes"),
+  uploadedFiles: document.querySelector("#uploaded-files"),
+  refreshFiles: document.querySelector("#refresh-files"),
   popover: document.querySelector("#selection-popover"),
   popoverExplain: document.querySelector("#popover-explain"),
   popoverCopy: document.querySelector("#popover-copy"),
@@ -747,11 +749,71 @@ elements.scale.addEventListener("input", () => {
   renderPage();
 });
 
-elements.fileInput.addEventListener("change", async () => {
-  const file = elements.fileInput.files?.[0];
-  if (!file) return;
-  const buffer = await file.arrayBuffer();
-  await loadPdf(new Uint8Array(buffer), file.name);
+async function uploadFiles(files) {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+
+  try {
+    setStatus("正在上传文件...");
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const result = await response.json();
+
+    if (result.success) {
+      setStatus(`成功上传 ${result.files.length} 个文件`);
+      await loadUploadedFiles();
+    } else {
+      setStatus(`上传失败：${result.error}`);
+    }
+  } catch (error) {
+    setStatus(`上传失败：${error.message}`);
+  }
+}
+
+elements.uploadInput.addEventListener("change", async () => {
+  const files = Array.from(elements.uploadInput.files || []);
+  if (files.length === 0) return;
+  await uploadFiles(files);
+  elements.uploadInput.value = "";
+});
+
+async function loadUploadedFiles() {
+  try {
+    const response = await fetch("/api/files");
+    const result = await response.json();
+
+    if (result.files && result.files.length > 0) {
+      elements.uploadedFiles.innerHTML = result.files
+        .map(
+          (file) => `
+            <div class="uploaded-file-item">
+              <span>${escapeHtml(file.name)}</span>
+              <button data-path="${escapeHtml(file.path)}" type="button">打开</button>
+            </div>
+          `,
+        )
+        .join("");
+
+      elements.uploadedFiles.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          const path = button.getAttribute("data-path");
+          loadPdf(path, path.split("/").pop());
+        });
+      });
+    } else {
+      elements.uploadedFiles.innerHTML = '<div class="empty-state">暂无已上传的 PDF 文件。</div>';
+    }
+  } catch (error) {
+    elements.uploadedFiles.innerHTML = '<div class="empty-state">加载文件列表失败。</div>';
+  }
+}
+
+elements.refreshFiles.addEventListener("click", () => {
+  loadUploadedFiles();
 });
 
 document.addEventListener("mouseup", () => setTimeout(readSelection, 0));
@@ -811,7 +873,11 @@ elements.termSearch.addEventListener("input", () => searchTerms(elements.termSea
 
 searchTerms("");
 renderNotes();
-loadPdf("/docs/svisual_ug.pdf").catch((error) => {
-  console.error(error);
-  setStatus(`加载失败：${error.message}`);
+loadUploadedFiles().then(() => {
+  const firstFile = elements.uploadedFiles.querySelector("button");
+  if (firstFile) {
+    firstFile.click();
+  } else {
+    setStatus("请先上传 PDF 文件");
+  }
 });

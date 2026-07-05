@@ -1,12 +1,13 @@
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
-import { createReadStream } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { readFile, stat, mkdir, writeFile, readdir } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { extname, join, normalize, resolve, basename } from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
 const publicRoot = resolve(root, "tools/sentaurus-reader/public");
 const docsRoot = resolve(root, "docs");
+const uploadRoot = resolve(root, "uploads");
 const pdfJsRoot = resolve(
   root,
   "node_modules/pdfjs-dist",
@@ -28,6 +29,12 @@ const contentTypes = new Map([
   [".ttf", "font/ttf"],
   [".pfb", "application/octet-stream"],
 ]);
+
+async function ensureUploadDir() {
+  if (!existsSync(uploadRoot)) {
+    await mkdir(uploadRoot, { recursive: true });
+  }
+}
 
 function isInside(parent, child) {
   const relative = normalize(child).slice(parent.length);
@@ -61,6 +68,66 @@ async function sendFile(response, filePath) {
     response.writeHead(404);
     response.end("Not found");
   }
+}
+
+async function parseMultipartForm(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      try {
+        const buffer = Buffer.concat(chunks);
+        const contentType = request.headers["content-type"];
+        const boundaryMatch = contentType.match(/boundary=([^;]+)/);
+        
+        if (!boundaryMatch) {
+          reject(new Error("No boundary found in Content-Type"));
+          return;
+        }
+        
+        const boundary = boundaryMatch[1];
+        const boundaryBuffer = Buffer.from(`--${boundary}`);
+        const parts = [];
+        let start = 0;
+        
+        while (true) {
+          const boundaryIndex = buffer.indexOf(boundaryBuffer, start);
+          if (boundaryIndex === -1) break;
+          
+          const nextBoundaryIndex = buffer.indexOf(boundaryBuffer, boundaryIndex + boundaryBuffer.length);
+          if (nextBoundaryIndex === -1) break;
+          
+          const partData = buffer.slice(boundaryIndex + boundaryBuffer.length, nextBoundaryIndex - 2);
+          const headersEnd = partData.indexOf("\r\n\r\n");
+          
+          if (headersEnd !== -1) {
+            const headers = partData.slice(0, headersEnd).toString("utf8");
+            const content = partData.slice(headersEnd + 4);
+            
+            const nameMatch = headers.match(/name="([^"]+)"/);
+            const filenameMatch = headers.match(/filename="([^"]+)"/);
+            const contentTypeMatch = headers.match(/Content-Type:\s*([^\r\n]+)/);
+            
+            if (nameMatch) {
+              parts.push({
+                name: nameMatch[1],
+                filename: filenameMatch ? filenameMatch[1] : null,
+                contentType: contentTypeMatch ? contentTypeMatch[1].trim() : null,
+                data: content,
+              });
+            }
+          }
+          
+          start = nextBoundaryIndex;
+        }
+        
+        resolve(parts);
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
 }
 
 async function route(request, response) {
@@ -109,6 +176,61 @@ async function route(request, response) {
   if (path === "/health") {
     response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     response.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (path === "/api/upload" && request.method === "POST") {
+    try {
+      await ensureUploadDir();
+      const parts = await parseMultipartForm(request);
+      const uploadedFiles = [];
+
+      for (const part of parts) {
+        if (part.filename && part.data) {
+          const filename = basename(part.filename);
+          const filePath = join(uploadRoot, filename);
+          await writeFile(filePath, part.data);
+          uploadedFiles.push({ filename, path: `/uploads/${filename}` });
+        }
+      }
+
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ success: true, files: uploadedFiles }));
+    } catch (error) {
+      response.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ success: false, error: error.message }));
+    }
+    return;
+  }
+
+  if (path === "/api/files" && request.method === "GET") {
+    try {
+      await ensureUploadDir();
+      const entries = await readdir(uploadRoot, { withFileTypes: true });
+      const files = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".pdf"))
+        .map((entry) => ({
+          name: entry.name,
+          path: `/uploads/${entry.name}`,
+        }));
+
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ files }));
+    } catch (error) {
+      response.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
+
+  if (path.startsWith("/uploads/")) {
+    const filePath = resolve(uploadRoot, path.replace(/^\/uploads\//, ""));
+    if (!isInside(uploadRoot, filePath)) {
+      response.writeHead(403);
+      response.end("Forbidden");
+      return;
+    }
+    await sendFile(response, filePath);
     return;
   }
 
