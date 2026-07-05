@@ -1,0 +1,10 @@
+{
+  "name": "sentaurus-reading-helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node tools/sentaurus-reader/server.mjs",
+    "sentaurus-reader": "node tools/sentaurus-reader/server.mjs"
+  }
+}

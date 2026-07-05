@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sentaurus Reading Helper</title>
+    <link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css">
+    <link rel="stylesheet" href="/app/styles.css">
+  </head>
+  <body>
+    <header class="toolbar">
+      <div>
+        <h1>Sentaurus Reading Helper</h1>
+        <p id="status">正在加载 PDF...</p>
+      </div>
+      <div class="toolbar-actions">
+        <label class="file-button">
+          打开 PDF
+          <input id="file-input" type="file" accept="application/pdf">
+        </label>
+        <button id="prev-page" type="button">上一页</button>
+        <label class="page-control">
+          <span>页码</span>
+          <input id="page-number" type="number" min="1" value="1">
+          <span id="page-count">/ 0</span>
+        </label>
+        <button id="next-page" type="button">下一页</button>
+        <label class="zoom-control">
+          <span>缩放</span>
+          <input id="scale" type="range" min="0.8" max="2" step="0.1" value="1.2">
+        </label>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="reader" aria-label="PDF reader">
+        <div id="page-shell" class="page-shell">
+          <canvas id="pdf-canvas"></canvas>
+          <div id="text-layer" class="textLayer"></div>
+        </div>
+      </section>
+
+      <aside class="assistant-panel" aria-label="Translation helper">
+        <section>
+          <h2>划词解释</h2>
+          <div id="empty-selection" class="empty-state">在 PDF 页面中选中英文术语或句子。</div>
+          <div id="selection-card" class="selection-card hidden">
+            <div class="label">选中文本</div>
+            <div id="selected-text" class="selected-text"></div>
+            <div class="button-row">
+              <button id="copy-text" type="button">复制文本</button>
+              <button id="copy-prompt" type="button">复制解释提示词</button>
+              <button id="save-note" type="button">存为笔记</button>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <h2>术语库命中</h2>
+          <div id="matches" class="matches"></div>
+        </section>
+
+        <section>
+          <h2>上下文</h2>
+          <p id="context" class="context">暂无上下文。</p>
+        </section>
+
+        <section>
+          <h2>术语搜索</h2>
+          <input id="term-search" class="term-search" type="search" placeholder="搜索 TCAD / mesh / contour...">
+          <div id="term-results" class="term-results"></div>
+        </section>
+
+        <section>
+          <div class="section-header">
+            <h2>阅读笔记</h2>
+            <button id="export-notes" type="button">导出</button>
+          </div>
+          <div id="notes" class="notes"></div>
+        </section>
+      </aside>
+    </main>
+
+    <div id="selection-popover" class="selection-popover hidden">
+      <button id="popover-explain" type="button">解释</button>
+      <button id="popover-copy" type="button">复制</button>
+    </div>
+
+    <script type="module" src="/app/app.js"></script>
+  </body>
+</html>
