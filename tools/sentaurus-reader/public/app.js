@@ -203,25 +203,30 @@ const elements = {
   nextPage: document.querySelector("#next-page"),
   pageNumber: document.querySelector("#page-number"),
   pageCount: document.querySelector("#page-count"),
-  scale: document.querySelector("#scale"),
+  zoomIn: document.querySelector("#zoom-in"),
+  zoomOut: document.querySelector("#zoom-out"),
+  zoomValue: document.querySelector("#zoom-value"),
+  toggleTheme: document.querySelector("#toggle-theme"),
   uploadInput: document.querySelector("#upload-input"),
   emptySelection: document.querySelector("#empty-selection"),
   selectionCard: document.querySelector("#selection-card"),
+  closeSelection: document.querySelector("#close-selection"),
   selectedText: document.querySelector("#selected-text"),
   copyText: document.querySelector("#copy-text"),
   copyPrompt: document.querySelector("#copy-prompt"),
   saveNote: document.querySelector("#save-note"),
   matches: document.querySelector("#matches"),
-  context: document.querySelector("#context"),
   termSearch: document.querySelector("#term-search"),
   termResults: document.querySelector("#term-results"),
   notes: document.querySelector("#notes"),
   exportNotes: document.querySelector("#export-notes"),
   uploadedFiles: document.querySelector("#uploaded-files"),
   refreshFiles: document.querySelector("#refresh-files"),
-  popover: document.querySelector("#selection-popover"),
-  popoverExplain: document.querySelector("#popover-explain"),
-  popoverCopy: document.querySelector("#popover-copy"),
+  translationResult: document.querySelector("#translation-result"),
+  translationText: document.querySelector("#translation-text"),
+  tabButtons: document.querySelectorAll(".tab-button"),
+  tabContents: document.querySelectorAll(".tab-content"),
+  filterButtons: document.querySelectorAll(".filter-button"),
 };
 
 const state = {
@@ -234,6 +239,8 @@ const state = {
   context: "",
   renderId: 0,
   notes: JSON.parse(localStorage.getItem("sentaurus-reader-notes") || "[]"),
+  theme: localStorage.getItem("sentaurus-reader-theme") || "light",
+  activeCategory: "all",
 };
 
 function normalizeText(value) {
@@ -344,6 +351,30 @@ async function copyText(value) {
   setStatus("已复制到剪贴板");
 }
 
+async function translateToChinese(text) {
+  if (!text) {
+    setStatus("没有可翻译的文本");
+    return;
+  }
+
+  try {
+    setStatus("正在翻译...");
+    const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh`);
+    const result = await response.json();
+
+    if (result.responseStatus === 200 && result.responseData) {
+      const translatedText = result.responseData.translatedText;
+      elements.translationText.textContent = translatedText;
+      elements.translationResult.classList.remove("hidden");
+      setStatus("翻译完成");
+    } else {
+      setStatus("翻译失败，请稍后重试");
+    }
+  } catch (error) {
+    setStatus(`翻译错误：${error.message}`);
+  }
+}
+
 function updateSelection(text, rect) {
   const cleaned = text.replace(/\s+/g, " ").trim();
   if (!cleaned) {
@@ -353,19 +384,16 @@ function updateSelection(text, rect) {
   state.selectedText = cleaned;
   state.context = extractContext(cleaned);
   elements.selectedText.textContent = cleaned;
-  elements.context.textContent = state.context || "暂无上下文。";
   elements.emptySelection.classList.add("hidden");
   elements.selectionCard.classList.remove("hidden");
+  elements.translationResult.classList.add("hidden");
   renderMatches(getMatches(cleaned));
+
+  // Auto-translate to Chinese
+  translateToChinese(cleaned);
 
   if (rect) {
     showWordFocus(rect);
-    elements.popover.classList.remove("hidden");
-    const popoverWidth = elements.popover.offsetWidth || 110;
-    const popoverHeight = elements.popover.offsetHeight || 44;
-    const left = rect.left + rect.width / 2 - popoverWidth / 2;
-    elements.popover.style.left = `${Math.min(window.innerWidth - popoverWidth - 12, Math.max(12, left))}px`;
-    elements.popover.style.top = `${Math.max(78, rect.top - popoverHeight - 8)}px`;
   }
 }
 
@@ -675,6 +703,11 @@ function searchTerms(query) {
   const normalized = normalizeText(query);
   const results = glossary
     .filter((item) => {
+      // Category filter
+      if (state.activeCategory !== "all" && item.category !== state.activeCategory) {
+        return false;
+      }
+      
       const haystack = normalizeText(`${item.term} ${item.zh} ${item.explanation} ${(item.aliases || []).join(" ")}`);
       return !normalized || haystack.includes(normalized);
     })
@@ -686,6 +719,7 @@ function searchTerms(query) {
         <article class="term-item">
           <b>${escapeHtml(item.term)}</b>：${escapeHtml(item.zh)}
           <div>${escapeHtml(item.explanation)}</div>
+          <div class="label">类别：${escapeHtml(item.category)}</div>
         </article>
       `,
     )
@@ -744,9 +778,67 @@ elements.pageNumber.addEventListener("keydown", (event) => {
   }
 });
 
-elements.scale.addEventListener("input", () => {
-  state.scale = Number.parseFloat(elements.scale.value);
+elements.zoomIn.addEventListener("click", () => {
+  state.scale = Math.min(2, state.scale + 0.1);
+  elements.zoomValue.textContent = `${Math.round(state.scale * 100)}%`;
   renderPage();
+});
+
+elements.zoomOut.addEventListener("click", () => {
+  state.scale = Math.max(0.8, state.scale - 0.1);
+  elements.zoomValue.textContent = `${Math.round(state.scale * 100)}%`;
+  renderPage();
+});
+
+// Theme toggle
+elements.toggleTheme.addEventListener("click", () => {
+  state.theme = state.theme === "light" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", state.theme);
+  localStorage.setItem("sentaurus-reader-theme", state.theme);
+});
+
+// Initialize theme
+if (state.theme === "dark") {
+  document.documentElement.setAttribute("data-theme", "dark");
+}
+
+// Tab switching
+elements.tabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const tabId = button.getAttribute("data-tab");
+    
+    // Update button states
+    elements.tabButtons.forEach((btn) => btn.classList.remove("active"));
+    button.classList.add("active");
+    
+    // Update content visibility
+    elements.tabContents.forEach((content) => {
+      content.classList.add("hidden");
+      if (content.id === `tab-${tabId}`) {
+        content.classList.remove("hidden");
+      }
+    });
+  });
+});
+
+// Category filter
+elements.filterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const category = button.getAttribute("data-category");
+    state.activeCategory = category;
+    
+    elements.filterButtons.forEach((btn) => btn.classList.remove("active"));
+    button.classList.add("active");
+    
+    searchTerms(elements.termSearch.value);
+  });
+});
+
+// Close selection card
+elements.closeSelection.addEventListener("click", () => {
+  elements.selectionCard.classList.add("hidden");
+  elements.emptySelection.classList.remove("hidden");
+  state.selectedText = "";
 });
 
 async function uploadFiles(files) {
@@ -831,19 +923,9 @@ elements.textLayer.addEventListener("dblclick", (event) => {
   }
 });
 
-document.addEventListener("mousedown", (event) => {
-  if (!elements.popover.contains(event.target)) {
-    elements.popover.classList.add("hidden");
-  }
-});
 
 elements.copyText.addEventListener("click", () => copyText(state.selectedText));
 elements.copyPrompt.addEventListener("click", () => copyText(buildPrompt()));
-elements.popoverCopy.addEventListener("click", () => copyText(state.selectedText));
-elements.popoverExplain.addEventListener("click", () => {
-  elements.popover.classList.add("hidden");
-  elements.selectionCard.scrollIntoView({ block: "nearest" });
-});
 
 elements.saveNote.addEventListener("click", () => {
   if (!state.selectedText) return;

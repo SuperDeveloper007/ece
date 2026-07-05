@@ -3,32 +3,38 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sentaurus Reading Helper</title>
+    <title>Sentaurus TCAD 阅读助手</title>
     <link rel="stylesheet" href="/pdfjs/web/pdf_viewer.css">
     <link rel="stylesheet" href="/app/styles.css">
   </head>
   <body>
     <header class="toolbar">
-      <div>
-        <h1>Sentaurus Reading Helper</h1>
-        <p id="status">正在加载 PDF...</p>
+      <div class="toolbar-brand">
+        <div>
+          <h1>Sentaurus TCAD 阅读助手</h1>
+          <p id="status">正在加载 PDF...</p>
+        </div>
       </div>
       <div class="toolbar-actions">
         <label class="file-button">
           上传 PDF
           <input id="upload-input" type="file" accept="application/pdf" multiple>
         </label>
-        <button id="prev-page" type="button">上一页</button>
-        <label class="page-control">
-          <span>页码</span>
-          <input id="page-number" type="number" min="1" value="1">
-          <span id="page-count">/ 0</span>
-        </label>
-        <button id="next-page" type="button">下一页</button>
-        <label class="zoom-control">
-          <span>缩放</span>
-          <input id="scale" type="range" min="0.8" max="2" step="0.1" value="1.2">
-        </label>
+        <div class="page-navigation">
+          <button id="prev-page" type="button" title="上一页">上一页</button>
+          <div class="page-input-wrapper">
+            <input id="page-number" type="number" min="1" value="1" class="page-input">
+            <span class="page-separator">/</span>
+            <span id="page-count" class="page-total">0</span>
+          </div>
+          <button id="next-page" type="button" title="下一页">下一页</button>
+        </div>
+        <div class="zoom-control">
+          <button id="zoom-out" type="button">-</button>
+          <span id="zoom-value" class="zoom-value">120%</span>
+          <button id="zoom-in" type="button">+</button>
+        </div>
+        <button id="toggle-theme" type="button" title="切换主题">切换主题</button>
       </div>
     </header>
 
@@ -41,58 +47,98 @@
       </section>
 
       <aside class="assistant-panel" aria-label="Translation helper">
-        <section>
-          <h2>划词解释</h2>
-          <div id="empty-selection" class="empty-state">在 PDF 页面中选中英文术语或句子。</div>
-          <div id="selection-card" class="selection-card hidden">
-            <div class="label">选中文本</div>
-            <div id="selected-text" class="selected-text"></div>
-            <div class="button-row">
-              <button id="copy-text" type="button">复制文本</button>
-              <button id="copy-prompt" type="button">复制解释提示词</button>
-              <button id="save-note" type="button">存为笔记</button>
+        <div class="panel-tabs">
+          <button class="tab-button active" data-tab="selection">划词解释</button>
+          <button class="tab-button" data-tab="glossary">术语库</button>
+          <button class="tab-button" data-tab="ai">AI 助手</button>
+          <button class="tab-button" data-tab="files">文件管理</button>
+          <button class="tab-button" data-tab="notes">阅读笔记</button>
+        </div>
+
+        <div class="tab-content" id="tab-selection">
+          <div class="selection-section">
+            <div id="empty-selection" class="empty-state">
+              <p>在 PDF 页面中选中英文术语或句子，或双击单词快速查询</p>
+            </div>
+            <div id="selection-card" class="selection-card hidden">
+              <div class="selection-header">
+                <span class="selection-label">选中文本</span>
+                <button id="close-selection" class="close-button">×</button>
+              </div>
+              <div id="selected-text" class="selected-text"></div>
+              <div class="button-row">
+                <button id="copy-text" type="button" class="action-button">复制</button>
+                <button id="copy-prompt" type="button" class="action-button">AI 提示词</button>
+                <button id="save-note" type="button" class="action-button">存笔记</button>
+              </div>
+              <div id="translation-result" class="translation-result hidden">
+                <div class="translation-header">
+                  <span class="translation-label">中文翻译</span>
+                  <span class="translation-source">MyMemory API</span>
+                </div>
+                <div id="translation-text" class="translation-text"></div>
+              </div>
             </div>
           </div>
-        </section>
 
-        <section>
-          <h2>术语库命中</h2>
-          <div id="matches" class="matches"></div>
-        </section>
+          <div class="matches-section">
+            <h3>术语库命中</h3>
+            <div id="matches" class="matches"></div>
+          </div>
+        </div>
 
-        <section>
-          <h2>上下文</h2>
-          <p id="context" class="context">暂无上下文。</p>
-        </section>
-
-        <section>
-          <h2>术语搜索</h2>
+        <div class="tab-content hidden" id="tab-glossary">
+          <div class="glossary-header">
+            <h3>术语搜索</h3>
+            <div class="category-filter">
+              <button class="filter-button active" data-category="all">全部</button>
+              <button class="filter-button" data-category="tool">工具</button>
+              <button class="filter-button" data-category="device">器件</button>
+              <button class="filter-button" data-category="visualization">可视化</button>
+              <button class="filter-button" data-category="physics">物理</button>
+            </div>
+          </div>
           <input id="term-search" class="term-search" type="search" placeholder="搜索 TCAD / mesh / contour...">
           <div id="term-results" class="term-results"></div>
-        </section>
+        </div>
 
-        <section>
+        <div class="tab-content hidden" id="tab-ai">
+          <div class="ai-chat-container">
+            <div class="ai-chat-header">
+              <h3>AI 助手</h3>
+              <div class="ai-status" id="ai-status">就绪</div>
+            </div>
+            <div id="ai-chat-messages" class="ai-chat-messages"></div>
+            <div class="ai-chat-input-section">
+              <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入问题，AI 将结合 TCAD/Sentaurus 知识库回答..." rows="3"></textarea>
+              <button id="ai-send-button" type="button" class="action-button">发送</button>
+            </div>
+            <div class="ai-quick-actions">
+              <button class="quick-action-button" data-prompt="解释当前选中的文本">解释选中内容</button>
+              <button class="quick-action-button" data-prompt="总结当前页面的主要内容">总结当前页</button>
+              <button class="quick-action-button" data-prompt="解释这个术语在 TCAD 中的作用">解释 TCAD 术语</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-files">
           <div class="section-header">
-            <h2>已上传的 PDF 文件</h2>
+            <h3>已上传的 PDF 文件</h3>
             <button id="refresh-files" type="button">刷新</button>
           </div>
           <div id="uploaded-files" class="uploaded-files"></div>
-        </section>
+        </div>
 
-        <section>
+        <div class="tab-content hidden" id="tab-notes">
           <div class="section-header">
-            <h2>阅读笔记</h2>
-            <button id="export-notes" type="button">导出</button>
+            <h3>阅读笔记</h3>
+            <button id="export-notes" type="button" class="action-button">导出</button>
           </div>
           <div id="notes" class="notes"></div>
-        </section>
+        </div>
       </aside>
     </main>
 
-    <div id="selection-popover" class="selection-popover hidden">
-      <button id="popover-explain" type="button">解释</button>
-      <button id="popover-copy" type="button">复制</button>
-    </div>
 
     <script type="module" src="/app/app.js"></script>
   </body>
