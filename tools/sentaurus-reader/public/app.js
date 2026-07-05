@@ -195,10 +195,12 @@ const glossary = [
 ];
 
 const elements = {
+  layout: document.querySelector(".layout"),
   status: document.querySelector("#status"),
   canvas: document.querySelector("#pdf-canvas"),
   textLayer: document.querySelector("#text-layer"),
   pageShell: document.querySelector("#page-shell"),
+  panelResizer: document.querySelector("#panel-resizer"),
   prevPage: document.querySelector("#prev-page"),
   nextPage: document.querySelector("#next-page"),
   pageNumber: document.querySelector("#page-number"),
@@ -232,6 +234,8 @@ const elements = {
   aiChatMessages: document.querySelector("#ai-chat-messages"),
   aiChatInput: document.querySelector("#ai-chat-input"),
   aiSendButton: document.querySelector("#ai-send-button"),
+  aiNewSession: document.querySelector("#ai-new-session"),
+  aiClearHistory: document.querySelector("#ai-clear-history"),
   aiQuickActions: document.querySelectorAll(".quick-action-button"),
 };
 
@@ -251,12 +255,118 @@ const state = {
   aiConfigured: false,
 };
 
+const panelSize = {
+  minPanel: 300,
+  minReader: 420,
+  storageKey: "sentaurus-reader-assistant-width",
+};
+
+const aiSession = {
+  storageKey: "sentaurus-reader-ai-session",
+  maxMessages: 40,
+};
+
 function normalizeText(value) {
   return value.toLowerCase().replace(/[^\w+-]+/g, " ").trim();
 }
 
 function setStatus(message) {
   elements.status.textContent = message;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getPanelWidthBounds() {
+  const layoutWidth = elements.layout.getBoundingClientRect().width;
+  return {
+    min: panelSize.minPanel,
+    max: Math.max(panelSize.minPanel, layoutWidth - panelSize.minReader),
+  };
+}
+
+function setPanelWidth(width, { persist = true } = {}) {
+  const bounds = getPanelWidthBounds();
+  const nextWidth = clamp(width, bounds.min, bounds.max);
+  document.documentElement.style.setProperty("--assistant-width", `${nextWidth}px`);
+  elements.panelResizer.setAttribute("aria-valuenow", String(Math.round(nextWidth)));
+
+  if (persist) {
+    localStorage.setItem(panelSize.storageKey, String(Math.round(nextWidth)));
+  }
+}
+
+function getPanelWidthFromPointer(clientX) {
+  const layoutRect = elements.layout.getBoundingClientRect();
+  return layoutRect.right - clientX - elements.panelResizer.offsetWidth / 2;
+}
+
+function getCurrentPanelWidth() {
+  const width = getComputedStyle(document.documentElement).getPropertyValue("--assistant-width");
+  return Number(width.replace("px", ""));
+}
+
+function initPanelResizer() {
+  const savedValue = localStorage.getItem(panelSize.storageKey);
+  const savedWidth = savedValue ? Number(savedValue) : NaN;
+  if (Number.isFinite(savedWidth)) {
+    setPanelWidth(savedWidth, { persist: false });
+  } else {
+    setPanelWidth(getCurrentPanelWidth(), { persist: false });
+  }
+
+  const bounds = getPanelWidthBounds();
+  elements.panelResizer.setAttribute("aria-valuemin", String(bounds.min));
+  elements.panelResizer.setAttribute("aria-valuemax", String(bounds.max));
+
+  elements.panelResizer.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1024px)").matches) {
+      return;
+    }
+
+    event.preventDefault();
+    elements.panelResizer.setPointerCapture(event.pointerId);
+    elements.panelResizer.classList.add("dragging");
+    document.body.classList.add("resizing-panel");
+    setPanelWidth(getPanelWidthFromPointer(event.clientX));
+  });
+
+  elements.panelResizer.addEventListener("pointermove", (event) => {
+    if (!elements.panelResizer.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+
+    setPanelWidth(getPanelWidthFromPointer(event.clientX));
+  });
+
+  const stopDragging = (event) => {
+    if (elements.panelResizer.hasPointerCapture(event.pointerId)) {
+      elements.panelResizer.releasePointerCapture(event.pointerId);
+    }
+    elements.panelResizer.classList.remove("dragging");
+    document.body.classList.remove("resizing-panel");
+  };
+
+  elements.panelResizer.addEventListener("pointerup", stopDragging);
+  elements.panelResizer.addEventListener("pointercancel", stopDragging);
+
+  elements.panelResizer.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? 24 : -24;
+    setPanelWidth(getCurrentPanelWidth() + delta);
+  });
+
+  window.addEventListener("resize", () => {
+    setPanelWidth(getCurrentPanelWidth(), { persist: false });
+    const nextBounds = getPanelWidthBounds();
+    elements.panelResizer.setAttribute("aria-valuemin", String(nextBounds.min));
+    elements.panelResizer.setAttribute("aria-valuemax", String(nextBounds.max));
+  });
 }
 
 function getMatches(text) {
@@ -303,13 +413,17 @@ function renderMatches(matches) {
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, (char) => ({
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
     '"': "&quot;",
     "'": "&#039;",
   })[char]);
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replace(/`/g, "&#096;");
 }
 
 function extractContext(selection) {
@@ -373,26 +487,304 @@ function switchTab(tabId) {
   });
 }
 
-function appendAiMessage(role, content, { persist = true } = {}) {
+function safeLinkUrl(value) {
+  const trimmed = String(value || "").trim();
+  if (/^(https?:|mailto:)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return "";
+}
+
+function renderInlineMarkdown(value) {
+  const source = String(value ?? "");
+  const linkPattern = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  let html = "";
+  let lastIndex = 0;
+  let match;
+
+  const formatText = (text) =>
+    escapeHtml(text)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/__([^_]+)__/g, "<strong>$1</strong>");
+
+  while ((match = linkPattern.exec(source)) !== null) {
+    html += formatText(source.slice(lastIndex, match.index));
+    const href = safeLinkUrl(match[2]);
+    const label = formatText(match[1]);
+    html += href
+      ? `<a href="${escapeAttribute(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+      : label;
+    lastIndex = match.index + match[0].length;
+  }
+
+  html += formatText(source.slice(lastIndex));
+  return html;
+}
+
+function isTableSeparator(line) {
+  const cells = line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function splitTableRow(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function renderTable(lines, startIndex) {
+  const header = splitTableRow(lines[startIndex]);
+  const bodyRows = [];
+  let index = startIndex + 2;
+
+  while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+    bodyRows.push(splitTableRow(lines[index]));
+    index += 1;
+  }
+
+  const columnCount = header.length;
+  const headHtml = header.map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`).join("");
+  const bodyHtml = bodyRows
+    .map((row) => {
+      const cells = Array.from({ length: columnCount }, (_, cellIndex) => row[cellIndex] || "");
+      return `<tr>${cells.map((cell) => `<td>${renderInlineMarkdown(cell)}</td>`).join("")}</tr>`;
+    })
+    .join("");
+
+  return {
+    html: `<div class="ai-markdown-table-wrapper"><table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table></div>`,
+    nextIndex: index,
+  };
+}
+
+function renderMarkdown(value) {
+  const lines = String(value ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const html = [];
+  let paragraph = [];
+  let index = 0;
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) {
+      return;
+    }
+    html.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+    paragraph = [];
+  };
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushParagraph();
+      index += 1;
+      continue;
+    }
+
+    const fenceMatch = trimmed.match(/^```\s*([A-Za-z0-9_-]+)?\s*$/);
+    if (fenceMatch) {
+      flushParagraph();
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) {
+        index += 1;
+      }
+      const language = fenceMatch[1] ? ` data-language="${escapeAttribute(fenceMatch[1])}"` : "";
+      html.push(`<pre><code${language}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+      continue;
+    }
+
+    if (line.includes("|") && lines[index + 1] && isTableSeparator(lines[index + 1])) {
+      flushParagraph();
+      const rendered = renderTable(lines, index);
+      html.push(rendered.html);
+      index = rendered.nextIndex;
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      const level = Math.min(headingMatch[1].length + 2, 6);
+      html.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(trimmed)) {
+      flushParagraph();
+      const quoteLines = [];
+      while (index < lines.length && /^>\s?/.test(lines[index].trim())) {
+        quoteLines.push(lines[index].trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      html.push(`<blockquote>${quoteLines.map(renderInlineMarkdown).join("<br>")}</blockquote>`);
+      continue;
+    }
+
+    const listMatch = trimmed.match(/^((?:[-*+])|\d+\.)\s+(.+)$/);
+    if (listMatch) {
+      flushParagraph();
+      const ordered = /^\d+\./.test(listMatch[1]);
+      const items = [];
+      while (index < lines.length) {
+        const current = lines[index].trim();
+        const currentMatch = current.match(/^((?:[-*+])|\d+\.)\s+(.+)$/);
+        if (!currentMatch || /^\d+\./.test(currentMatch[1]) !== ordered) {
+          break;
+        }
+        items.push(currentMatch[2]);
+        index += 1;
+      }
+      const tag = ordered ? "ol" : "ul";
+      html.push(`<${tag}>${items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+
+    paragraph.push(line);
+    index += 1;
+  }
+
+  flushParagraph();
+  return html.join("");
+}
+
+function formatMessageTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function persistAiMessages() {
+  const messages = state.aiMessages.slice(-aiSession.maxMessages).map((item) => ({
+    role: item.role,
+    content: item.content,
+    createdAt: item.createdAt,
+    pageNumber: item.pageNumber,
+    selectedText: item.selectedText,
+  }));
+  localStorage.setItem(aiSession.storageKey, JSON.stringify(messages));
+}
+
+function renderAiMessage(messageData) {
+  const { role, content, createdAt } = messageData;
   const message = document.createElement("article");
   message.className = `ai-message ai-message-${role}`;
+
+  const header = document.createElement("div");
+  header.className = "ai-message-header";
 
   const label = document.createElement("div");
   label.className = "ai-message-label";
   label.textContent = role === "user" ? "你" : "AI";
 
+  const meta = document.createElement("span");
+  meta.className = "ai-message-meta";
+  meta.textContent = formatMessageTime(createdAt);
+
+  const labelGroup = document.createElement("div");
+  labelGroup.className = "ai-message-title";
+  labelGroup.append(label);
+  if (meta.textContent) {
+    labelGroup.append(meta);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "ai-message-actions";
+
+  const copyButton = document.createElement("button");
+  copyButton.type = "button";
+  copyButton.className = "ai-copy-button";
+  copyButton.textContent = "复制";
+  copyButton.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      copyButton.textContent = "已复制";
+      setAiStatus("已复制消息");
+      window.setTimeout(() => {
+        copyButton.textContent = "复制";
+      }, 1400);
+    } catch (error) {
+      setAiStatus(`复制失败：${error.message}`);
+    }
+  });
+  actions.append(copyButton);
+  header.append(labelGroup, actions);
+
   const body = document.createElement("div");
   body.className = "ai-message-body";
-  body.textContent = content;
+  body.innerHTML = renderMarkdown(content);
 
-  message.append(label, body);
+  message.append(header, body);
   elements.aiChatMessages.append(message);
   elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+}
+
+function appendAiMessage(role, content, { persist = true, createdAt, pageNumber, selectedText } = {}) {
+  const messageData = {
+    role,
+    content: String(content ?? ""),
+    createdAt: createdAt || new Date().toISOString(),
+    pageNumber: pageNumber ?? state.pageNumber,
+    selectedText: selectedText ?? state.selectedText,
+  };
+
+  renderAiMessage(messageData);
 
   if (persist) {
-    state.aiMessages.push({ role, content });
-    state.aiMessages = state.aiMessages.slice(-10);
+    state.aiMessages.push(messageData);
+    state.aiMessages = state.aiMessages.slice(-aiSession.maxMessages);
+    persistAiMessages();
   }
+}
+
+function restoreAiMessages() {
+  let savedMessages = [];
+  try {
+    const parsed = JSON.parse(localStorage.getItem(aiSession.storageKey) || "[]");
+    if (Array.isArray(parsed)) {
+      savedMessages = parsed
+        .filter((item) => item && ["user", "assistant"].includes(item.role) && item.content)
+        .map((item) => ({
+          role: item.role,
+          content: String(item.content),
+          createdAt: item.createdAt || new Date().toISOString(),
+          pageNumber: Number.isFinite(Number(item.pageNumber)) ? Number(item.pageNumber) : null,
+          selectedText: String(item.selectedText || ""),
+        }))
+        .slice(-aiSession.maxMessages);
+    }
+  } catch {
+    savedMessages = [];
+  }
+
+  state.aiMessages = savedMessages;
+  elements.aiChatMessages.replaceChildren();
+  savedMessages.forEach((message) => renderAiMessage(message));
+  elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+  return savedMessages.length;
+}
+
+function clearAiSession(message = "已清空历史，可以开始新的提问。") {
+  state.aiMessages = [];
+  localStorage.removeItem(aiSession.storageKey);
+  elements.aiChatMessages.replaceChildren();
+  appendAiMessage("assistant", message, { persist: false });
 }
 
 function getGlossaryContext(query) {
@@ -422,6 +814,25 @@ function buildQuickQuestion(prompt) {
       : "请说明一个 TCAD 术语的定义、使用场景和常见误解。";
   }
 
+  if (prompt === "生成学习卡片") {
+    return state.selectedText
+      ? `请基于当前选中文本“${state.selectedText}”生成一张学习卡片，包含术语/概念、中文解释、Sentaurus Visual 或 TCAD 使用场景、易错点和一个记忆提示。`
+      : "请基于当前 PDF 页面的内容生成 3 张学习卡片，每张包含术语/概念、中文解释、使用场景、易错点和记忆提示。";
+  }
+
+  if (prompt === "列出后续问题") {
+    const latestAnswer = [...state.aiMessages].reverse().find((item) => item.role === "assistant")?.content || "";
+    return latestAnswer
+      ? `请基于你上一条回答，列出 3 个最值得继续追问的问题，并说明每个问题为什么有助于理解 Sentaurus Visual / TCAD。上一条回答：${latestAnswer}`
+      : "请基于当前 PDF 页面内容，列出 3 个最值得继续追问的问题，并说明每个问题为什么有助于理解 Sentaurus Visual / TCAD。";
+  }
+
+  if (prompt === "翻译并解释") {
+    return state.selectedText
+      ? `请先把当前选中文本翻译成中文，再解释它在 Sentaurus Visual / TCAD 语境中的专业含义、操作用途和可能的注意点。选中文本：${state.selectedText}`
+      : "请从当前 PDF 页面中提炼关键英文术语，先给出中文翻译，再解释它们在 Sentaurus Visual / TCAD 中的专业含义和操作用途。";
+  }
+
   return prompt;
 }
 
@@ -444,7 +855,9 @@ async function refreshAiStatus() {
   } catch (error) {
     state.aiConfigured = false;
     setAiStatus("状态未知");
-    appendAiMessage("assistant", `无法读取 AI 状态：${error.message}`, { persist: false });
+    if (elements.aiChatMessages.childElementCount === 0) {
+      appendAiMessage("assistant", `无法读取 AI 状态：${error.message}`, { persist: false });
+    }
   }
 }
 
@@ -941,6 +1354,7 @@ elements.toggleTheme.addEventListener("click", () => {
 if (state.theme === "dark") {
   document.documentElement.setAttribute("data-theme", "dark");
 }
+initPanelResizer();
 
 // Tab switching
 elements.tabButtons.forEach((button) => {
@@ -1063,6 +1477,18 @@ elements.aiSendButton.addEventListener("click", () => {
   sendAiQuestion(elements.aiChatInput.value);
 });
 
+elements.aiNewSession.addEventListener("click", () => {
+  clearAiSession("已开始新会话。我会继续结合当前选区、页面上下文和本地术语库回答。");
+  setAiStatus(state.aiConfigured ? "新会话" : "未配置");
+  elements.aiChatInput.focus();
+});
+
+elements.aiClearHistory.addEventListener("click", () => {
+  clearAiSession();
+  setAiStatus("历史已清空");
+  elements.aiChatInput.focus();
+});
+
 elements.aiChatInput.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
     event.preventDefault();
@@ -1105,6 +1531,7 @@ elements.termSearch.addEventListener("input", () => searchTerms(elements.termSea
 
 searchTerms("");
 renderNotes();
+restoreAiMessages();
 refreshAiStatus();
 loadUploadedFiles().then(() => {
   const firstFile = elements.uploadedFiles.querySelector("button");

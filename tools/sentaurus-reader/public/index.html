@@ -46,6 +46,15 @@
         </div>
       </section>
 
+      <div
+        id="panel-resizer"
+        class="panel-resizer"
+        role="separator"
+        aria-label="调整右侧工具栏宽度"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
+
       <aside class="assistant-panel" aria-label="Translation helper">
         <div class="panel-tabs">
           <button class="tab-button active" data-tab="selection">划词解释</button>
@@ -107,7 +116,11 @@
           <div class="ai-chat-container">
             <div class="ai-chat-header">
               <h3>AI 助手</h3>
-              <div class="ai-status" id="ai-status">就绪</div>
+              <div class="ai-chat-header-actions">
+                <button id="ai-new-session" type="button" class="ai-text-button">新会话</button>
+                <button id="ai-clear-history" type="button" class="ai-text-button">清空历史</button>
+                <div class="ai-status" id="ai-status">就绪</div>
+              </div>
             </div>
             <div id="ai-chat-messages" class="ai-chat-messages"></div>
             <div class="ai-chat-input-section">
@@ -117,7 +130,9 @@
             <div class="ai-quick-actions">
               <button class="quick-action-button" data-prompt="解释当前选中的文本">解释选中内容</button>
               <button class="quick-action-button" data-prompt="总结当前页面的主要内容">总结当前页</button>
-              <button class="quick-action-button" data-prompt="解释这个术语在 TCAD 中的作用">解释 TCAD 术语</button>
+              <button class="quick-action-button" data-prompt="生成学习卡片">生成学习卡片</button>
+              <button class="quick-action-button" data-prompt="列出后续问题">列出后续问题</button>
+              <button class="quick-action-button" data-prompt="翻译并解释">翻译并解释</button>
             </div>
           </div>
         </div>
