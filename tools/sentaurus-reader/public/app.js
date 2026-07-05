@@ -214,6 +214,7 @@ const elements = {
   selectedText: document.querySelector("#selected-text"),
   copyText: document.querySelector("#copy-text"),
   copyPrompt: document.querySelector("#copy-prompt"),
+  askAi: document.querySelector("#ask-ai"),
   saveNote: document.querySelector("#save-note"),
   matches: document.querySelector("#matches"),
   termSearch: document.querySelector("#term-search"),
@@ -227,6 +228,11 @@ const elements = {
   tabButtons: document.querySelectorAll(".tab-button"),
   tabContents: document.querySelectorAll(".tab-content"),
   filterButtons: document.querySelectorAll(".filter-button"),
+  aiStatus: document.querySelector("#ai-status"),
+  aiChatMessages: document.querySelector("#ai-chat-messages"),
+  aiChatInput: document.querySelector("#ai-chat-input"),
+  aiSendButton: document.querySelector("#ai-send-button"),
+  aiQuickActions: document.querySelectorAll(".quick-action-button"),
 };
 
 const state = {
@@ -241,6 +247,8 @@ const state = {
   notes: JSON.parse(localStorage.getItem("sentaurus-reader-notes") || "[]"),
   theme: localStorage.getItem("sentaurus-reader-theme") || "light",
   activeCategory: "all",
+  aiMessages: [],
+  aiConfigured: false,
 };
 
 function normalizeText(value) {
@@ -349,6 +357,138 @@ ${glossaryText}`;
 async function copyText(value) {
   await navigator.clipboard.writeText(value);
   setStatus("已复制到剪贴板");
+}
+
+function setAiStatus(message) {
+  elements.aiStatus.textContent = message;
+}
+
+function switchTab(tabId) {
+  elements.tabButtons.forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-tab") === tabId);
+  });
+
+  elements.tabContents.forEach((content) => {
+    content.classList.toggle("hidden", content.id !== `tab-${tabId}`);
+  });
+}
+
+function appendAiMessage(role, content, { persist = true } = {}) {
+  const message = document.createElement("article");
+  message.className = `ai-message ai-message-${role}`;
+
+  const label = document.createElement("div");
+  label.className = "ai-message-label";
+  label.textContent = role === "user" ? "你" : "AI";
+
+  const body = document.createElement("div");
+  body.className = "ai-message-body";
+  body.textContent = content;
+
+  message.append(label, body);
+  elements.aiChatMessages.append(message);
+  elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+
+  if (persist) {
+    state.aiMessages.push({ role, content });
+    state.aiMessages = state.aiMessages.slice(-10);
+  }
+}
+
+function getGlossaryContext(query) {
+  const source = [query, state.selectedText, state.context, state.pageText].filter(Boolean).join(" ");
+  return getMatches(source).map((item) => ({
+    term: item.term,
+    zh: item.zh,
+    category: item.category,
+    explanation: item.explanation,
+  }));
+}
+
+function buildQuickQuestion(prompt) {
+  if (prompt === "解释当前选中的文本") {
+    return state.selectedText
+      ? `请解释当前选中的文本：${state.selectedText}`
+      : "请先在 PDF 页面中选中文本，然后解释其含义。";
+  }
+
+  if (prompt === "总结当前页面的主要内容") {
+    return "请总结当前 PDF 页面的主要内容，并指出其中和 Sentaurus Visual / TCAD 操作相关的重点。";
+  }
+
+  if (prompt === "解释这个术语在 TCAD 中的作用") {
+    return state.selectedText
+      ? `请解释术语“${state.selectedText}”在 TCAD / Sentaurus 中的作用。`
+      : "请说明一个 TCAD 术语的定义、使用场景和常见误解。";
+  }
+
+  return prompt;
+}
+
+async function refreshAiStatus() {
+  try {
+    const response = await fetch("/api/ai/status");
+    const result = await response.json();
+    state.aiConfigured = Boolean(result.configured);
+    setAiStatus(result.configured ? `已连接：${result.model}` : "未配置");
+
+    if (elements.aiChatMessages.childElementCount === 0) {
+      appendAiMessage(
+        "assistant",
+        result.configured
+          ? "可以直接提问。我会结合当前选区、页面上下文和本地术语库回答。"
+          : "AI 服务未配置。启动前设置 OPENAI_API_KEY，或设置 AI_BASE_URL 指向兼容 OpenAI Chat Completions 的本地/私有服务。",
+        { persist: false },
+      );
+    }
+  } catch (error) {
+    state.aiConfigured = false;
+    setAiStatus("状态未知");
+    appendAiMessage("assistant", `无法读取 AI 状态：${error.message}`, { persist: false });
+  }
+}
+
+async function sendAiQuestion(question) {
+  const cleaned = String(question || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return;
+  }
+
+  const history = state.aiMessages.slice(-6);
+  appendAiMessage("user", cleaned);
+  elements.aiChatInput.value = "";
+  elements.aiSendButton.disabled = true;
+  setAiStatus("思考中...");
+
+  try {
+    const response = await fetch("/api/ai/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: cleaned,
+        selectedText: state.selectedText,
+        context: state.context,
+        pageText: state.pageText,
+        pageNumber: state.pageNumber,
+        glossary: getGlossaryContext(cleaned),
+        history,
+      }),
+    });
+    const result = await response.json();
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "AI 请求失败");
+    }
+
+    appendAiMessage("assistant", result.answer);
+    setAiStatus(result.model ? `完成：${result.model}` : "完成");
+  } catch (error) {
+    appendAiMessage("assistant", `请求失败：${error.message}`, { persist: false });
+    setAiStatus("请求失败");
+  } finally {
+    elements.aiSendButton.disabled = false;
+    elements.aiChatInput.focus();
+  }
 }
 
 async function translateToChinese(text) {
@@ -805,19 +945,7 @@ if (state.theme === "dark") {
 // Tab switching
 elements.tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    const tabId = button.getAttribute("data-tab");
-    
-    // Update button states
-    elements.tabButtons.forEach((btn) => btn.classList.remove("active"));
-    button.classList.add("active");
-    
-    // Update content visibility
-    elements.tabContents.forEach((content) => {
-      content.classList.add("hidden");
-      if (content.id === `tab-${tabId}`) {
-        content.classList.remove("hidden");
-      }
-    });
+    switchTab(button.getAttribute("data-tab"));
   });
 });
 
@@ -926,6 +1054,28 @@ elements.textLayer.addEventListener("dblclick", (event) => {
 
 elements.copyText.addEventListener("click", () => copyText(state.selectedText));
 elements.copyPrompt.addEventListener("click", () => copyText(buildPrompt()));
+elements.askAi.addEventListener("click", () => {
+  switchTab("ai");
+  sendAiQuestion(state.selectedText ? `请解释当前选中的文本：${state.selectedText}` : "请说明当前页面的重点内容。");
+});
+
+elements.aiSendButton.addEventListener("click", () => {
+  sendAiQuestion(elements.aiChatInput.value);
+});
+
+elements.aiChatInput.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    sendAiQuestion(elements.aiChatInput.value);
+  }
+});
+
+elements.aiQuickActions.forEach((button) => {
+  button.addEventListener("click", () => {
+    switchTab("ai");
+    sendAiQuestion(buildQuickQuestion(button.getAttribute("data-prompt") || ""));
+  });
+});
 
 elements.saveNote.addEventListener("click", () => {
   if (!state.selectedText) return;
@@ -955,6 +1105,7 @@ elements.termSearch.addEventListener("input", () => searchTerms(elements.termSea
 
 searchTerms("");
 renderNotes();
+refreshAiStatus();
 loadUploadedFiles().then(() => {
   const firstFile = elements.uploadedFiles.querySelector("button");
   if (firstFile) {

@@ -41,7 +41,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -62,6 +63,12 @@ button:hover {
 
 button:active {
   transform: translateY(1px);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
 }
 
 .file-button {
@@ -512,6 +519,114 @@ button:active {
 
 .term-item b {
   color: var(--ink);
+}
+
+.ai-chat-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.ai-chat-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ai-chat-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.ai-status {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.ai-chat-messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ai-message {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.ai-message-user {
+  align-self: flex-end;
+  background: var(--accent-bg);
+  border-color: var(--accent);
+  max-width: 92%;
+}
+
+.ai-message-assistant {
+  align-self: flex-start;
+  background: var(--bg);
+  max-width: 100%;
+}
+
+.ai-message-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+
+.ai-message-body {
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ai-chat-input-section {
+  align-items: flex-end;
+  display: flex;
+  gap: 8px;
+}
+
+.ai-chat-input {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  line-height: 1.45;
+  min-height: 76px;
+  padding: 10px 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.ai-chat-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+  outline: none;
+}
+
+.ai-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.quick-action-button {
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 10px;
 }
 
 .section-header {

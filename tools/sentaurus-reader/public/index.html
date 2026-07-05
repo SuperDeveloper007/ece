@@ -69,6 +69,7 @@
               <div class="button-row">
                 <button id="copy-text" type="button" class="action-button">复制</button>
                 <button id="copy-prompt" type="button" class="action-button">AI 提示词</button>
+                <button id="ask-ai" type="button" class="action-button">问 AI</button>
                 <button id="save-note" type="button" class="action-button">存笔记</button>
               </div>
               <div id="translation-result" class="translation-result hidden">
@@ -110,7 +111,7 @@
             </div>
             <div id="ai-chat-messages" class="ai-chat-messages"></div>
             <div class="ai-chat-input-section">
-              <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入问题，AI 将结合 TCAD/Sentaurus 知识库回答..." rows="3"></textarea>
+              <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入问题，AI 将结合当前选区、页面上下文和 TCAD/Sentaurus 术语库回答..." rows="3"></textarea>
               <button id="ai-send-button" type="button" class="action-button">发送</button>
             </div>
             <div class="ai-quick-actions">
