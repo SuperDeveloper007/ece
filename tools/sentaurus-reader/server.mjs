@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { readFile, stat, mkdir, writeFile, readdir } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
-import { extname, join, normalize, resolve, basename } from "node:path";
+import { extname, join, relative, resolve, basename, isAbsolute } from "node:path";
 import process from "node:process";
 
 const root = process.cwd();
@@ -73,8 +73,8 @@ async function ensureUploadDir() {
 }
 
 function isInside(parent, child) {
-  const relative = normalize(child).slice(parent.length);
-  return child === parent || (relative.startsWith("/") && !relative.includes(".."));
+  const relativePath = relative(parent, child);
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 async function existingPdfJsRoot() {
