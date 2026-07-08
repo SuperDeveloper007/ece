@@ -6,5 +6,8 @@
   "scripts": {
     "start": "node tools/sentaurus-reader/server.mjs",
     "sentaurus-reader": "node tools/sentaurus-reader/server.mjs"
+  },
+  "dependencies": {
+    "pdfjs-dist": "5.6.205"
   }
 }

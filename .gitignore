@@ -42,3 +42,6 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Node.js
+node_modules/
