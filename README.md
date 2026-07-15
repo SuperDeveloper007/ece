@@ -33,11 +33,23 @@ docs/svisual_ug.pdf
 cp .env.example .env.local
 ```
 
-然后只在 `.env.local` 中填写你自己的密钥：
+然后在 `.env.local` 中配置一个或多个供应商组：
 
 ```text
-OPENAI_API_KEY=你的密钥
-OPENAI_MODEL=gpt-4o-mini
+AI_PROVIDERS=gemini,deepseek
+AI_DEFAULT_PROVIDER=gemini
+
+AI_PROVIDER_GEMINI_LABEL=Google Gemini
+AI_PROVIDER_GEMINI_API_KEY=你的Gemini密钥
+AI_PROVIDER_GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_PROVIDER_GEMINI_MODEL=gemini-3.5-flash
+AI_PROVIDER_GEMINI_MODELS=gemini-3.5-flash
+
+AI_PROVIDER_DEEPSEEK_LABEL=DeepSeek
+AI_PROVIDER_DEEPSEEK_API_KEY=你的DeepSeek密钥
+AI_PROVIDER_DEEPSEEK_BASE_URL=https://api.deepseek.com
+AI_PROVIDER_DEEPSEEK_MODEL=deepseek-v4-pro
+AI_PROVIDER_DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash
 ```
 
 `.env.local` 已在 `.gitignore` 中排除，不应提交到 GitHub。填好后正常启动：
@@ -46,14 +58,22 @@ OPENAI_MODEL=gpt-4o-mini
 npm run start
 ```
 
-也可以在 `.env.local` 中接入本地或私有兼容服务：
+供应商 ID 会转换为对应的大写变量前缀。例如 `my-local` 对应 `AI_PROVIDER_MY_LOCAL_*`。每组拥有独立的 API Key、Base URL、默认模型和模型列表；聊天界面切换供应商时会联动更新可选模型。
+
+旧的单供应商配置仍然兼容。未设置 `AI_PROVIDERS` 时，可以继续使用：
 
 ```text
+AI_API_KEY=你的密钥
 AI_BASE_URL=http://127.0.0.1:11434/v1
 AI_MODEL=你的模型名
+AI_MODELS=你的模型名,另一个模型名
 ```
 
+如果某个供应商组指向无需密钥的可信本地服务，可额外设置 `AI_PROVIDER_<ID>_ALLOW_NO_KEY=true`。
+
 AI 助手会把用户问题、当前选区、当前页文本片段和本地术语库命中发送到配置的 AI 服务，用于回答 Sentaurus Visual / TCAD 相关知识问题。
+
+AI Assistant 使用紧凑的英文界面。聊天消息支持复制、编辑后重新生成和回答重试；生成过程中可以点击“Stop”。输入框按 `Enter` 直接发送，按 `Shift + Enter` 换行。对话区还支持添加 PDF、文本与常见代码文件，并可在“Answer”和“Plan”模式之间切换。
 
 ## 为什么先做本地工具
 

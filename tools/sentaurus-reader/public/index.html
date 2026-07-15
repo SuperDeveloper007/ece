@@ -59,7 +59,7 @@
         <div class="panel-tabs">
           <button class="tab-button active" data-tab="selection">划词解释</button>
           <button class="tab-button" data-tab="glossary">术语库</button>
-          <button class="tab-button" data-tab="ai">AI 助手</button>
+          <button class="tab-button" data-tab="ai">Assistant</button>
           <button class="tab-button" data-tab="files">文件管理</button>
           <button class="tab-button" data-tab="notes">阅读笔记</button>
         </div>
@@ -115,24 +115,60 @@
         <div class="tab-content hidden" id="tab-ai">
           <div class="ai-chat-container">
             <div class="ai-chat-header">
-              <h3>AI 助手</h3>
+              <div class="ai-heading">
+                <div class="ai-avatar" aria-hidden="true">AI</div>
+                <div>
+                  <h3>Assistant</h3>
+                  <div class="ai-status" id="ai-status">Ready</div>
+                </div>
+              </div>
               <div class="ai-chat-header-actions">
-                <button id="ai-new-session" type="button" class="ai-text-button">新会话</button>
-                <button id="ai-clear-history" type="button" class="ai-text-button">清空历史</button>
-                <div class="ai-status" id="ai-status">就绪</div>
+                <button id="ai-new-session" type="button" class="ai-text-button">New</button>
+                <button id="ai-clear-history" type="button" class="ai-text-button">Clear</button>
               </div>
             </div>
-            <div id="ai-chat-messages" class="ai-chat-messages"></div>
-            <div class="ai-chat-input-section">
-              <textarea id="ai-chat-input" class="ai-chat-input" placeholder="输入问题，AI 将结合当前选区、页面上下文和 TCAD/Sentaurus 术语库回答..." rows="3"></textarea>
-              <button id="ai-send-button" type="button" class="action-button">发送</button>
+            <div class="ai-config-bar" aria-label="Assistant settings">
+              <label class="ai-config-control">
+                <span class="visually-hidden">Provider</span>
+                <select id="ai-provider-select" class="ai-config-select" aria-label="Select provider" title="Provider"></select>
+              </label>
+              <label class="ai-config-control">
+                <span class="visually-hidden">Model</span>
+                <select id="ai-model-select" class="ai-config-select" aria-label="Select model" title="Model"></select>
+              </label>
+              <label class="ai-config-control ai-mode-control">
+                <span class="visually-hidden">Mode</span>
+                <select id="ai-mode-select" class="ai-config-select" aria-label="Select response mode" title="Response mode">
+                  <option value="answer">Answer</option>
+                  <option value="plan">Plan</option>
+                </select>
+              </label>
             </div>
-            <div class="ai-quick-actions">
-              <button class="quick-action-button" data-prompt="解释当前选中的文本">解释选中内容</button>
-              <button class="quick-action-button" data-prompt="总结当前页面的主要内容">总结当前页</button>
-              <button class="quick-action-button" data-prompt="生成学习卡片">生成学习卡片</button>
-              <button class="quick-action-button" data-prompt="列出后续问题">列出后续问题</button>
-              <button class="quick-action-button" data-prompt="翻译并解释">翻译并解释</button>
+            <div id="ai-chat-messages" class="ai-chat-messages"></div>
+            <div class="ai-quick-actions" aria-label="Suggested prompts">
+              <button class="quick-action-button" data-action="explain-selection">Explain selection</button>
+              <button class="quick-action-button" data-action="summarize-page">Summarize page</button>
+              <button class="quick-action-button" data-action="study-cards">Study cards</button>
+              <button class="quick-action-button" data-action="follow-ups">Follow-ups</button>
+              <button class="quick-action-button" data-action="translate">Translate</button>
+            </div>
+            <div class="ai-chat-input-section">
+              <div class="ai-composer">
+                <div id="ai-editing-banner" class="ai-editing-banner hidden">
+                  <span>Editing this message will replace the replies after it.</span>
+                  <button id="ai-cancel-edit" type="button" class="ai-text-button">Cancel</button>
+                </div>
+                <div id="ai-attachments" class="ai-attachments hidden" aria-live="polite"></div>
+                <textarea id="ai-chat-input" class="ai-chat-input" placeholder="Ask about the current page, selection, or attached files…" rows="3"></textarea>
+                <div class="ai-composer-footer">
+                  <div class="ai-composer-tools">
+                    <button id="ai-attach-trigger" type="button" class="ai-attach-button">+ File</button>
+                    <span class="ai-input-hint">Enter to send · Shift + Enter for a new line</span>
+                  </div>
+                  <input id="ai-file-input" class="ai-file-input" type="file" multiple accept=".pdf,.txt,.md,.csv,.json,.log,.tcl,.cmd,.xml,.yaml,.yml,.py,.js,.mjs,.ts,.css,.html,text/*,application/pdf,application/json">
+                  <button id="ai-send-button" type="button" class="ai-send-button">Send</button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

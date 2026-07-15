@@ -231,9 +231,17 @@ const elements = {
   tabContents: document.querySelectorAll(".tab-content"),
   filterButtons: document.querySelectorAll(".filter-button"),
   aiStatus: document.querySelector("#ai-status"),
+  aiProviderSelect: document.querySelector("#ai-provider-select"),
+  aiModeSelect: document.querySelector("#ai-mode-select"),
+  aiModelSelect: document.querySelector("#ai-model-select"),
   aiChatMessages: document.querySelector("#ai-chat-messages"),
   aiChatInput: document.querySelector("#ai-chat-input"),
   aiSendButton: document.querySelector("#ai-send-button"),
+  aiEditingBanner: document.querySelector("#ai-editing-banner"),
+  aiCancelEdit: document.querySelector("#ai-cancel-edit"),
+  aiAttachments: document.querySelector("#ai-attachments"),
+  aiAttachTrigger: document.querySelector("#ai-attach-trigger"),
+  aiFileInput: document.querySelector("#ai-file-input"),
   aiNewSession: document.querySelector("#ai-new-session"),
   aiClearHistory: document.querySelector("#ai-clear-history"),
   aiQuickActions: document.querySelectorAll(".quick-action-button"),
@@ -253,6 +261,15 @@ const state = {
   activeCategory: "all",
   aiMessages: [],
   aiConfigured: false,
+  aiProvider: localStorage.getItem("sentaurus-reader-ai-provider") || "",
+  aiProviders: [],
+  aiMode: localStorage.getItem("sentaurus-reader-ai-mode") === "plan" ? "plan" : "answer",
+  aiModel: localStorage.getItem("sentaurus-reader-ai-model") || "",
+  aiModels: [],
+  aiAttachments: [],
+  aiBusy: false,
+  aiRequestController: null,
+  editingMessageId: null,
 };
 
 const panelSize = {
@@ -264,6 +281,13 @@ const panelSize = {
 const aiSession = {
   storageKey: "sentaurus-reader-ai-session",
   maxMessages: 40,
+};
+
+const aiAttachmentLimits = {
+  maxFiles: 5,
+  maxFileBytes: 2 * 1024 * 1024,
+  maxContentChars: 8000,
+  maxTotalChars: 24000,
 };
 
 function normalizeText(value) {
@@ -670,28 +694,227 @@ function formatMessageTime(value) {
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
+function createMessageId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function setAiBusy(busy) {
+  state.aiBusy = busy;
+  elements.aiSendButton.textContent = busy ? "Stop" : "Send";
+  elements.aiSendButton.classList.toggle("ai-stop-button", busy);
+  elements.aiChatInput.disabled = busy;
+  elements.aiFileInput.disabled = busy;
+  elements.aiAttachTrigger.disabled = busy;
+  elements.aiProviderSelect.disabled = busy;
+  elements.aiModeSelect.disabled = busy;
+  elements.aiModelSelect.disabled = busy;
+  elements.aiQuickActions.forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${Math.round(bytes / 1024)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderAiAttachments() {
+  elements.aiAttachments.replaceChildren();
+  elements.aiAttachments.classList.toggle("hidden", state.aiAttachments.length === 0);
+
+  state.aiAttachments.forEach((attachment) => {
+    const chip = document.createElement("div");
+    chip.className = "ai-attachment-chip";
+
+    const label = document.createElement("span");
+    label.textContent = `${attachment.name} · ${formatFileSize(attachment.size)}`;
+    label.title = attachment.name;
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.textContent = "×";
+    removeButton.title = `Remove ${attachment.name}`;
+    removeButton.setAttribute("aria-label", `Remove ${attachment.name}`);
+    removeButton.addEventListener("click", () => {
+      state.aiAttachments = state.aiAttachments.filter((item) => item.id !== attachment.id);
+      renderAiAttachments();
+    });
+
+    chip.append(label, removeButton);
+    elements.aiAttachments.append(chip);
+  });
+}
+
+function setAiAttachments(attachments) {
+  state.aiAttachments = attachments.map((item) => ({
+    id: item.id || createMessageId(),
+    name: String(item.name || "Untitled file"),
+    type: String(item.type || "text/plain"),
+    size: Number(item.size) || 0,
+    content: String(item.content || ""),
+  }));
+  renderAiAttachments();
+}
+
+async function extractPdfAttachment(file) {
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  const pdf = await loadingTask.promise;
+  const pages = [];
+  let length = 0;
+
+  try {
+    for (let pageNumber = 1; pageNumber <= Math.min(pdf.numPages, 10); pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item) => item.str || "").join(" ").trim();
+      if (pageText) {
+        const section = `[Page ${pageNumber}]\n${pageText}`;
+        pages.push(section);
+        length += section.length;
+      }
+      if (length >= aiAttachmentLimits.maxContentChars) {
+        break;
+      }
+    }
+  } finally {
+    await pdf.destroy();
+  }
+
+  return pages.join("\n\n").slice(0, aiAttachmentLimits.maxContentChars);
+}
+
+async function extractAiAttachment(file) {
+  if (file.size > aiAttachmentLimits.maxFileBytes) {
+    throw new Error(`${file.name} is larger than 2 MB`);
+  }
+
+  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+  const content = isPdf
+    ? await extractPdfAttachment(file)
+    : (await file.text()).replace(/\0/g, "").slice(0, aiAttachmentLimits.maxContentChars);
+
+  if (!content.trim()) {
+    throw new Error(`No readable text found in ${file.name}`);
+  }
+
+  return {
+    id: createMessageId(),
+    name: file.name,
+    type: file.type || "text/plain",
+    size: file.size,
+    content,
+  };
+}
+
+async function addAiFiles(fileList) {
+  const availableSlots = aiAttachmentLimits.maxFiles - state.aiAttachments.length;
+  const files = Array.from(fileList || []).slice(0, Math.max(0, availableSlots));
+  if (files.length === 0) {
+    setAiStatus(`Up to ${aiAttachmentLimits.maxFiles} files per message`);
+    return;
+  }
+
+  setAiStatus("Reading files…");
+  const added = [];
+  const errors = [];
+  let totalChars = state.aiAttachments.reduce((sum, item) => sum + item.content.length, 0);
+
+  for (const file of files) {
+    try {
+      const attachment = await extractAiAttachment(file);
+      const remaining = aiAttachmentLimits.maxTotalChars - totalChars;
+      if (remaining <= 0) {
+        throw new Error("The attachment text limit has been reached");
+      }
+      attachment.content = attachment.content.slice(0, remaining);
+      totalChars += attachment.content.length;
+      added.push(attachment);
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+
+  setAiAttachments([...state.aiAttachments, ...added]);
+  setAiStatus(errors.length ? `Added ${added.length} · ${errors[0]}` : `Added ${added.length} file${added.length === 1 ? "" : "s"}`);
+}
+
+function renderAiMessages() {
+  elements.aiChatMessages.replaceChildren();
+  state.aiMessages.forEach((message) => renderAiMessage(message));
+  elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+}
+
+function cancelMessageEdit({ clearInput = true } = {}) {
+  state.editingMessageId = null;
+  elements.aiEditingBanner.classList.add("hidden");
+  if (clearInput) {
+    elements.aiChatInput.value = "";
+  }
+  setAiAttachments([]);
+}
+
+function beginMessageEdit(messageData) {
+  if (state.aiBusy) {
+    return;
+  }
+  state.editingMessageId = messageData.id;
+  elements.aiChatInput.value = messageData.content;
+  setAiAttachments(messageData.attachments || []);
+  if (["answer", "plan"].includes(messageData.mode)) {
+    state.aiMode = messageData.mode;
+    elements.aiModeSelect.value = messageData.mode;
+  }
+  if (messageData.provider && state.aiProviders.some((item) => item.id === messageData.provider)) {
+    selectAiProvider(messageData.provider);
+  }
+  if (messageData.model && state.aiModels.includes(messageData.model)) {
+    state.aiModel = messageData.model;
+    elements.aiModelSelect.value = messageData.model;
+  }
+  elements.aiEditingBanner.classList.remove("hidden");
+  setAiStatus("Editing message");
+  elements.aiChatInput.focus();
+  elements.aiChatInput.setSelectionRange(elements.aiChatInput.value.length, elements.aiChatInput.value.length);
+}
+
 function persistAiMessages() {
   const messages = state.aiMessages.slice(-aiSession.maxMessages).map((item) => ({
+    id: item.id,
     role: item.role,
     content: item.content,
     createdAt: item.createdAt,
     pageNumber: item.pageNumber,
     selectedText: item.selectedText,
+    isError: Boolean(item.isError),
+    attachments: item.attachments || [],
+    mode: item.mode || "answer",
+    model: item.model || "",
+    provider: item.provider || "",
   }));
   localStorage.setItem(aiSession.storageKey, JSON.stringify(messages));
 }
 
 function renderAiMessage(messageData) {
-  const { role, content, createdAt } = messageData;
+  const { role, content, createdAt, transient, isError, attachments = [] } = messageData;
   const message = document.createElement("article");
   message.className = `ai-message ai-message-${role}`;
+  message.classList.toggle("ai-message-error", Boolean(isError));
 
   const header = document.createElement("div");
   header.className = "ai-message-header";
 
   const label = document.createElement("div");
   label.className = "ai-message-label";
-  label.textContent = role === "user" ? "你" : "AI";
+  label.textContent = role === "user" ? "You" : "AI";
 
   const meta = document.createElement("span");
   meta.className = "ai-message-meta";
@@ -707,41 +930,92 @@ function renderAiMessage(messageData) {
   const actions = document.createElement("div");
   actions.className = "ai-message-actions";
 
+  if (role === "user" && !transient) {
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "ai-message-action";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", () => beginMessageEdit(messageData));
+    actions.append(editButton);
+  }
+
   const copyButton = document.createElement("button");
   copyButton.type = "button";
-  copyButton.className = "ai-copy-button";
-  copyButton.textContent = "复制";
+  copyButton.className = "ai-message-action";
+  copyButton.textContent = "Copy";
   copyButton.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(content);
-      copyButton.textContent = "已复制";
-      setAiStatus("已复制消息");
+      copyButton.textContent = "Copied";
+      setAiStatus("Copied to clipboard");
       window.setTimeout(() => {
-        copyButton.textContent = "复制";
+        copyButton.textContent = "Copy";
       }, 1400);
     } catch (error) {
-      setAiStatus(`复制失败：${error.message}`);
+      setAiStatus(`Copy failed: ${error.message}`);
     }
   });
   actions.append(copyButton);
+
+  if (role === "assistant" && !transient) {
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "ai-message-action";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", () => retryAiMessage(messageData.id));
+    actions.append(retryButton);
+  }
   header.append(labelGroup, actions);
 
   const body = document.createElement("div");
   body.className = "ai-message-body";
   body.innerHTML = renderMarkdown(content);
 
+  if (role === "user" && attachments.length > 0) {
+    const attachmentList = document.createElement("div");
+    attachmentList.className = "ai-message-attachment-list";
+    attachments.forEach((attachment) => {
+      const item = document.createElement("span");
+      item.textContent = `📎 ${attachment.name}`;
+      attachmentList.append(item);
+    });
+    body.append(attachmentList);
+  }
+
   message.append(header, body);
   elements.aiChatMessages.append(message);
   elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
 }
 
-function appendAiMessage(role, content, { persist = true, createdAt, pageNumber, selectedText } = {}) {
+function appendAiMessage(
+  role,
+  content,
+  {
+    persist = true,
+    id,
+    createdAt,
+    pageNumber,
+    selectedText,
+    isError = false,
+    attachments = [],
+    mode = "answer",
+    model = "",
+    provider = "",
+  } = {},
+) {
   const messageData = {
+    id: id || createMessageId(),
     role,
     content: String(content ?? ""),
     createdAt: createdAt || new Date().toISOString(),
     pageNumber: pageNumber ?? state.pageNumber,
     selectedText: selectedText ?? state.selectedText,
+    isError,
+    transient: !persist,
+    attachments,
+    mode,
+    model,
+    provider,
   };
 
   renderAiMessage(messageData);
@@ -761,11 +1035,17 @@ function restoreAiMessages() {
       savedMessages = parsed
         .filter((item) => item && ["user", "assistant"].includes(item.role) && item.content)
         .map((item) => ({
+          id: String(item.id || createMessageId()),
           role: item.role,
           content: String(item.content),
           createdAt: item.createdAt || new Date().toISOString(),
           pageNumber: Number.isFinite(Number(item.pageNumber)) ? Number(item.pageNumber) : null,
           selectedText: String(item.selectedText || ""),
+          isError: Boolean(item.isError),
+          attachments: Array.isArray(item.attachments) ? item.attachments : [],
+          mode: item.mode === "plan" ? "plan" : "answer",
+          model: String(item.model || ""),
+          provider: String(item.provider || ""),
         }))
         .slice(-aiSession.maxMessages);
     }
@@ -774,16 +1054,16 @@ function restoreAiMessages() {
   }
 
   state.aiMessages = savedMessages;
-  elements.aiChatMessages.replaceChildren();
-  savedMessages.forEach((message) => renderAiMessage(message));
-  elements.aiChatMessages.scrollTop = elements.aiChatMessages.scrollHeight;
+  renderAiMessages();
   return savedMessages.length;
 }
 
-function clearAiSession(message = "已清空历史，可以开始新的提问。") {
+function clearAiSession(message = "History cleared. Start a new conversation whenever you're ready.") {
+  state.aiRequestController?.abort();
   state.aiMessages = [];
   localStorage.removeItem(aiSession.storageKey);
   elements.aiChatMessages.replaceChildren();
+  cancelMessageEdit();
   appendAiMessage("assistant", message, { persist: false });
 }
 
@@ -797,43 +1077,81 @@ function getGlossaryContext(query) {
   }));
 }
 
-function buildQuickQuestion(prompt) {
-  if (prompt === "解释当前选中的文本") {
+function buildQuickQuestion(action) {
+  if (action === "explain-selection") {
     return state.selectedText
-      ? `请解释当前选中的文本：${state.selectedText}`
-      : "请先在 PDF 页面中选中文本，然后解释其含义。";
+      ? `Explain this selected text in its Sentaurus Visual / TCAD context: ${state.selectedText}`
+      : "Explain the key concepts on the current PDF page.";
   }
 
-  if (prompt === "总结当前页面的主要内容") {
-    return "请总结当前 PDF 页面的主要内容，并指出其中和 Sentaurus Visual / TCAD 操作相关的重点。";
+  if (action === "summarize-page") {
+    return "Summarize the current PDF page and highlight the parts most relevant to Sentaurus Visual / TCAD workflows.";
   }
 
-  if (prompt === "解释这个术语在 TCAD 中的作用") {
+  if (action === "study-cards") {
     return state.selectedText
-      ? `请解释术语“${state.selectedText}”在 TCAD / Sentaurus 中的作用。`
-      : "请说明一个 TCAD 术语的定义、使用场景和常见误解。";
+      ? `Create a study card for “${state.selectedText}” with its meaning, TCAD use case, common pitfall, and a memory cue.`
+      : "Create three concise study cards from the current PDF page, including meaning, use case, pitfall, and memory cue.";
   }
 
-  if (prompt === "生成学习卡片") {
-    return state.selectedText
-      ? `请基于当前选中文本“${state.selectedText}”生成一张学习卡片，包含术语/概念、中文解释、Sentaurus Visual 或 TCAD 使用场景、易错点和一个记忆提示。`
-      : "请基于当前 PDF 页面的内容生成 3 张学习卡片，每张包含术语/概念、中文解释、使用场景、易错点和记忆提示。";
-  }
-
-  if (prompt === "列出后续问题") {
+  if (action === "follow-ups") {
     const latestAnswer = [...state.aiMessages].reverse().find((item) => item.role === "assistant")?.content || "";
     return latestAnswer
-      ? `请基于你上一条回答，列出 3 个最值得继续追问的问题，并说明每个问题为什么有助于理解 Sentaurus Visual / TCAD。上一条回答：${latestAnswer}`
-      : "请基于当前 PDF 页面内容，列出 3 个最值得继续追问的问题，并说明每个问题为什么有助于理解 Sentaurus Visual / TCAD。";
+      ? `Suggest three useful follow-up questions based on your previous answer, and briefly explain why each matters. Previous answer: ${latestAnswer}`
+      : "Suggest three useful follow-up questions based on the current PDF page, and briefly explain why each matters.";
   }
 
-  if (prompt === "翻译并解释") {
+  if (action === "translate") {
     return state.selectedText
-      ? `请先把当前选中文本翻译成中文，再解释它在 Sentaurus Visual / TCAD 语境中的专业含义、操作用途和可能的注意点。选中文本：${state.selectedText}`
-      : "请从当前 PDF 页面中提炼关键英文术语，先给出中文翻译，再解释它们在 Sentaurus Visual / TCAD 中的专业含义和操作用途。";
+      ? `Translate the selected text into Chinese, then explain its technical meaning and practical use in Sentaurus Visual / TCAD: ${state.selectedText}`
+      : "Identify the key English terms on the current PDF page, translate them into Chinese, and explain their TCAD meaning.";
   }
 
-  return prompt;
+  return action;
+}
+
+function getActiveAiProvider() {
+  return state.aiProviders.find((item) => item.id === state.aiProvider) || null;
+}
+
+function selectAiProvider(providerId, { persist = true } = {}) {
+  const provider = state.aiProviders.find((item) => item.id === providerId) || state.aiProviders[0];
+  if (!provider) {
+    state.aiProvider = "";
+    state.aiModels = [];
+    state.aiModel = "";
+    elements.aiModelSelect.replaceChildren();
+    return;
+  }
+
+  state.aiProvider = provider.id;
+  state.aiModels = provider.models;
+  elements.aiProviderSelect.value = provider.id;
+  if (persist) {
+    localStorage.setItem("sentaurus-reader-ai-provider", provider.id);
+  }
+
+  const providerModelKey = `sentaurus-reader-ai-model:${provider.id}`;
+  const savedModel = localStorage.getItem(providerModelKey);
+  const preferredModel = provider.models.includes(savedModel)
+    ? savedModel
+    : provider.models.includes(state.aiModel)
+      ? state.aiModel
+      : provider.model || provider.models[0] || "";
+
+  elements.aiModelSelect.replaceChildren();
+  provider.models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    elements.aiModelSelect.append(option);
+  });
+  state.aiModel = preferredModel;
+  elements.aiModelSelect.value = preferredModel;
+  if (preferredModel) {
+    localStorage.setItem(providerModelKey, preferredModel);
+    localStorage.setItem("sentaurus-reader-ai-model", preferredModel);
+  }
 }
 
 async function refreshAiStatus() {
@@ -841,37 +1159,111 @@ async function refreshAiStatus() {
     const response = await fetch("/api/ai/status");
     const result = await response.json();
     state.aiConfigured = Boolean(result.configured);
-    setAiStatus(result.configured ? `已连接：${result.model}` : "未配置");
+    const rawProviders = Array.isArray(result.providers) && result.providers.length
+      ? result.providers
+      : [{
+          id: String(result.provider || "default"),
+          label: "Default provider",
+          configured: Boolean(result.configured),
+          model: String(result.model || "gpt-4o-mini"),
+          models: Array.isArray(result.models) ? result.models : [result.model || "gpt-4o-mini"],
+        }];
+    state.aiProviders = rawProviders.map((provider) => ({
+      id: String(provider.id),
+      label: String(provider.label || provider.id),
+      configured: Boolean(provider.configured),
+      model: String(provider.model || ""),
+      models: Array.isArray(provider.models) ? provider.models.map(String) : [],
+    }));
+
+    elements.aiProviderSelect.replaceChildren();
+    state.aiProviders.forEach((provider) => {
+      const option = document.createElement("option");
+      option.value = provider.id;
+      option.textContent = provider.configured ? provider.label : `${provider.label} (not configured)`;
+      elements.aiProviderSelect.append(option);
+    });
+    const preferredProvider = state.aiProviders.some((item) => item.id === state.aiProvider)
+      ? state.aiProvider
+      : String(result.provider || state.aiProviders[0]?.id || "");
+    selectAiProvider(preferredProvider, { persist: false });
+    const activeProvider = getActiveAiProvider();
+    setAiStatus(activeProvider?.configured ? `${activeProvider.label} · ${state.aiModel}` : "Not configured");
 
     if (elements.aiChatMessages.childElementCount === 0) {
       appendAiMessage(
         "assistant",
         result.configured
-          ? "可以直接提问。我会结合当前选区、页面上下文和本地术语库回答。"
-          : "AI 服务未配置。启动前设置 OPENAI_API_KEY，或设置 AI_BASE_URL 指向兼容 OpenAI Chat Completions 的本地/私有服务。",
+          ? "Ask about the current page, selected text, or an attached file."
+          : "The AI service is not configured. Add a provider to .env.local, then restart the app.",
         { persist: false },
       );
     }
   } catch (error) {
     state.aiConfigured = false;
-    setAiStatus("状态未知");
+    setAiStatus("Connection unavailable");
     if (elements.aiChatMessages.childElementCount === 0) {
-      appendAiMessage("assistant", `无法读取 AI 状态：${error.message}`, { persist: false });
+      appendAiMessage("assistant", `Could not load the AI service status: ${error.message}`, { persist: false });
     }
   }
 }
 
-async function sendAiQuestion(question) {
-  const cleaned = String(question || "").replace(/\s+/g, " ").trim();
-  if (!cleaned) {
+function getAiHistory(messages) {
+  return messages.filter((item) => !item.isError).slice(-6);
+}
+
+function stopAiRequest() {
+  if (state.aiRequestController) {
+    state.aiRequestController.abort();
+  }
+}
+
+async function sendAiQuestion(
+  question,
+  {
+    appendUser = true,
+    historyOverride = null,
+    attachmentsOverride = null,
+    modeOverride = null,
+    modelOverride = null,
+    providerOverride = null,
+  } = {},
+) {
+  const attachmentSource = attachmentsOverride || state.aiAttachments;
+  const typedQuestion = String(question || "").replace(/\r\n?/g, "\n").trim();
+  const cleaned = typedQuestion || (attachmentSource.length ? "Analyze the attached files." : "");
+  if (!cleaned || state.aiBusy) {
     return;
   }
 
-  const history = state.aiMessages.slice(-6);
-  appendAiMessage("user", cleaned);
+  let historySource = historyOverride;
+  if (appendUser && state.editingMessageId) {
+    const editIndex = state.aiMessages.findIndex(
+      (item) => item.id === state.editingMessageId && item.role === "user",
+    );
+    if (editIndex >= 0) {
+      historySource = state.aiMessages.slice(0, editIndex);
+      state.aiMessages = state.aiMessages.slice(0, editIndex);
+      persistAiMessages();
+      renderAiMessages();
+    }
+    cancelMessageEdit({ clearInput: false });
+  }
+
+  const history = getAiHistory(historySource || state.aiMessages);
+  const attachments = attachmentSource;
+  const mode = modeOverride || state.aiMode;
+  const model = modelOverride || state.aiModel;
+  const provider = providerOverride || state.aiProvider;
+  if (appendUser) {
+    appendAiMessage("user", cleaned, { attachments, mode, model, provider });
+  }
   elements.aiChatInput.value = "";
-  elements.aiSendButton.disabled = true;
-  setAiStatus("思考中...");
+  setAiAttachments([]);
+  const controller = new AbortController();
+  state.aiRequestController = controller;
+  setAiBusy(true);
+  setAiStatus("Thinking…");
 
   try {
     const response = await fetch("/api/ai/query", {
@@ -885,23 +1277,76 @@ async function sendAiQuestion(question) {
         pageNumber: state.pageNumber,
         glossary: getGlossaryContext(cleaned),
         history,
+        attachments,
+        mode,
+        model,
+        provider,
       }),
+      signal: controller.signal,
     });
-    const result = await response.json();
+    const result = await response.json().catch(() => ({}));
 
     if (!response.ok || !result.success) {
-      throw new Error(result.error || "AI 请求失败");
+      throw new Error(result.error || `Request failed (${response.status})`);
     }
 
     appendAiMessage("assistant", result.answer);
-    setAiStatus(result.model ? `完成：${result.model}` : "完成");
+    setAiStatus(result.model ? `${result.providerLabel || provider} · ${result.model}` : "Done");
   } catch (error) {
-    appendAiMessage("assistant", `请求失败：${error.message}`, { persist: false });
-    setAiStatus("请求失败");
+    if (error.name === "AbortError") {
+      setAiStatus("Generation stopped");
+    } else {
+      appendAiMessage("assistant", `Request failed: ${error.message}`, { isError: true });
+      setAiStatus("Request failed · Retry available");
+    }
   } finally {
-    elements.aiSendButton.disabled = false;
-    elements.aiChatInput.focus();
+    if (state.aiRequestController === controller) {
+      state.aiRequestController = null;
+      setAiBusy(false);
+      elements.aiChatInput.focus();
+    }
   }
+}
+
+function retryAiMessage(messageId) {
+  if (state.aiBusy) {
+    return;
+  }
+
+  const assistantIndex = state.aiMessages.findIndex(
+    (item) => item.id === messageId && item.role === "assistant",
+  );
+  if (assistantIndex < 0) {
+    return;
+  }
+
+  let userIndex = assistantIndex - 1;
+  while (userIndex >= 0 && state.aiMessages[userIndex].role !== "user") {
+    userIndex -= 1;
+  }
+  if (userIndex < 0) {
+    setAiStatus("No question found to retry");
+    return;
+  }
+
+  const question = state.aiMessages[userIndex].content;
+  const attachments = state.aiMessages[userIndex].attachments || [];
+  const mode = state.aiMessages[userIndex].mode || "answer";
+  const model = state.aiMessages[userIndex].model || state.aiModel;
+  const provider = state.aiMessages[userIndex].provider || state.aiProvider;
+  const history = state.aiMessages.slice(0, userIndex);
+  state.aiMessages = state.aiMessages.slice(0, assistantIndex);
+  persistAiMessages();
+  renderAiMessages();
+  cancelMessageEdit();
+  sendAiQuestion(question, {
+    appendUser: false,
+    historyOverride: history,
+    attachmentsOverride: attachments,
+    modeOverride: mode,
+    modelOverride: model,
+    providerOverride: provider,
+  });
 }
 
 async function translateToChinese(text) {
@@ -1470,27 +1915,71 @@ elements.copyText.addEventListener("click", () => copyText(state.selectedText));
 elements.copyPrompt.addEventListener("click", () => copyText(buildPrompt()));
 elements.askAi.addEventListener("click", () => {
   switchTab("ai");
-  sendAiQuestion(state.selectedText ? `请解释当前选中的文本：${state.selectedText}` : "请说明当前页面的重点内容。");
+  sendAiQuestion(state.selectedText
+    ? `Explain this selected text in its Sentaurus Visual / TCAD context: ${state.selectedText}`
+    : "Summarize the key points on the current page.");
 });
 
 elements.aiSendButton.addEventListener("click", () => {
+  if (state.aiBusy) {
+    stopAiRequest();
+    return;
+  }
   sendAiQuestion(elements.aiChatInput.value);
 });
 
+elements.aiCancelEdit.addEventListener("click", () => {
+  cancelMessageEdit();
+  setAiStatus(state.aiConfigured ? "Ready" : "Not configured");
+  elements.aiChatInput.focus();
+});
+
+elements.aiFileInput.addEventListener("change", async () => {
+  await addAiFiles(elements.aiFileInput.files);
+  elements.aiFileInput.value = "";
+  elements.aiChatInput.focus();
+});
+
+elements.aiAttachTrigger.addEventListener("click", () => {
+  elements.aiFileInput.click();
+});
+
+elements.aiProviderSelect.addEventListener("change", () => {
+  selectAiProvider(elements.aiProviderSelect.value);
+  const provider = getActiveAiProvider();
+  setAiStatus(provider?.configured ? `${provider.label} · ${state.aiModel}` : `${provider?.label || "Provider"} is not configured`);
+});
+
+elements.aiModeSelect.addEventListener("change", () => {
+  state.aiMode = elements.aiModeSelect.value === "plan" ? "plan" : "answer";
+  localStorage.setItem("sentaurus-reader-ai-mode", state.aiMode);
+  setAiStatus(state.aiMode === "plan" ? "Plan mode" : "Answer mode");
+});
+
+elements.aiModelSelect.addEventListener("change", () => {
+  state.aiModel = elements.aiModelSelect.value;
+  if (state.aiProvider) {
+    localStorage.setItem(`sentaurus-reader-ai-model:${state.aiProvider}`, state.aiModel);
+  }
+  localStorage.setItem("sentaurus-reader-ai-model", state.aiModel);
+  const provider = getActiveAiProvider();
+  setAiStatus(`${provider?.label || state.aiProvider} · ${state.aiModel}`);
+});
+
 elements.aiNewSession.addEventListener("click", () => {
-  clearAiSession("已开始新会话。我会继续结合当前选区、页面上下文和本地术语库回答。");
-  setAiStatus(state.aiConfigured ? "新会话" : "未配置");
+  clearAiSession("New conversation started. Page context and selected text remain available.");
+  setAiStatus(state.aiConfigured ? "New conversation" : "Not configured");
   elements.aiChatInput.focus();
 });
 
 elements.aiClearHistory.addEventListener("click", () => {
   clearAiSession();
-  setAiStatus("历史已清空");
+  setAiStatus("History cleared");
   elements.aiChatInput.focus();
 });
 
 elements.aiChatInput.addEventListener("keydown", (event) => {
-  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {
     event.preventDefault();
     sendAiQuestion(elements.aiChatInput.value);
   }
@@ -1499,7 +1988,7 @@ elements.aiChatInput.addEventListener("keydown", (event) => {
 elements.aiQuickActions.forEach((button) => {
   button.addEventListener("click", () => {
     switchTab("ai");
-    sendAiQuestion(buildQuickQuestion(button.getAttribute("data-prompt") || ""));
+    sendAiQuestion(buildQuickQuestion(button.getAttribute("data-action") || ""));
   });
 });
 
@@ -1531,6 +2020,8 @@ elements.termSearch.addEventListener("input", () => searchTerms(elements.termSea
 
 searchTerms("");
 renderNotes();
+elements.aiModeSelect.value = state.aiMode;
+renderAiAttachments();
 restoreAiMessages();
 refreshAiStatus();
 loadUploadedFiles().then(() => {
